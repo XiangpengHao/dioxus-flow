@@ -1,0 +1,20 @@
+html,
+body,
+#main {
+  height: 100%;
+  margin: 0;
+  /* App shell: the canvas owns all panning; the page itself never scrolls. */
+  overflow: hidden;
+}
+
+/* The amber feedback edge: keep its label in the stroke's family instead of
+   the library's accent recolor, so hover/selected states stay harmonious. */
+.df-edge.tune .df-edge-label {
+  fill: #b45309;
+}
+
+@media (prefers-color-scheme: dark) {
+  .df-edge.tune .df-edge-label {
+    fill: #fbbf24;
+  }
+}

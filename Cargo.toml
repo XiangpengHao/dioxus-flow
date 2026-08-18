@@ -1,6 +1,19 @@
-[package]
-name = "dioxus-flow"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+resolver = "2"
+members = ["dioxus-flow", "demo"]
 
-[dependencies]
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/XiangpengHao/dioxus-flow"
+
+[workspace.dependencies]
+# The library depends on the renderer-agnostic "lib" feature set; the demo
+# adds the web renderer on top.
+dioxus = { version = "0.7.10", default-features = false, features = ["lib"] }
+dioxus-flow = { path = "dioxus-flow" }
+
+[profile.release]
+opt-level = 3
+lto = true

@@ -1,0 +1,21 @@
+[package]
+name = "demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+dioxus = { workspace = true, features = ["launch", "devtools", "logger"] }
+dioxus-flow = { workspace = true }
+# Pinned to the wasm-bindgen-cli version wrapped by the nixpkgs dioxus-cli
+# (`dx` requires the crate and CLI versions to match exactly).
+wasm-bindgen = "=0.2.126"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# For the `?stress=N` benchmark graph (see main.rs).
+web-sys = { version = "0.3", features = ["Window", "Location"] }
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
