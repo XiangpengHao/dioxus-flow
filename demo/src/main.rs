@@ -18,6 +18,7 @@ fn App() -> Element {
     let edges = use_signal(initial_edges);
     let flow = use_flow_handle::<CardData>();
     let history = use_signal(Vec::<Snapshot>::new);
+    let anchor = use_signal(AnchorMode::default);
 
     // Single-step-style undo: every mutating action snapshots first.
     let snapshot = use_callback(move |_: ()| {
@@ -51,13 +52,18 @@ fn App() -> Element {
                     undo.call(());
                 }
             },
-            Toolbar { flow, nodes, history, snapshot, undo }
+            Toolbar { flow, nodes, history, snapshot, undo, anchor }
             main { class: "relative min-h-0 flex-1",
                 Flow {
                     nodes,
                     edges,
                     fit_view: true,
                     handle: flow,
+                    anchor: anchor(),
+                    // Moving a node should be one undo step, snapshotted the
+                    // moment the press becomes a drag — and never on a click.
+                    drag_threshold: 4.0,
+                    on_node_drag_start: move |_ids| snapshot.call(()),
                     on_delete: move |_| {
                         snapshot.call(());
                         flow.delete_selected();

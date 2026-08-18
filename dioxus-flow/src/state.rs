@@ -39,6 +39,9 @@ pub struct DragState {
     /// The pointer that owns the current gesture; other pointers' moves and
     /// releases are ignored while it runs.
     pub pointer_id: Option<i32>,
+    /// Where the press went down, in client coordinates: what a drag
+    /// threshold measures against.
+    pub origin_client: Point,
     pub last_client: Point,
     pub moved: bool,
     /// A release without movement is normally a pane click; a gesture begun
@@ -77,6 +80,10 @@ pub struct FlowConfig {
     /// `zoom_on_scroll`.
     pub pan_on_scroll: bool,
     pub nodes_draggable: bool,
+    /// How far (screen px) a press on a node must travel before it moves the
+    /// node. Zero moves on the first pixel; a few pixels keep sloppy clicks
+    /// from nudging nodes.
+    pub drag_threshold: f64,
     /// Snap radius for completing connections, in screen pixels.
     pub connection_radius: f64,
     pub fit_view_padding: f64,
@@ -93,6 +100,7 @@ impl Default for FlowConfig {
             zoom_on_scroll: true,
             pan_on_scroll: false,
             nodes_draggable: true,
+            drag_threshold: 0.0,
             connection_radius: 28.0,
             fit_view_padding: 0.12,
         }
@@ -143,6 +151,14 @@ pub struct FlowCore {
     pub(crate) pending_handles: Signal<Vec<(HandleKey, Option<HandleGeom>)>>,
     /// Whether a handle flush is already scheduled for this frame.
     pub(crate) handle_flush_queued: Signal<bool>,
+    /// Fired when a connection drag leaves a handle (the gesture starting,
+    /// not completing). Stored here because the gesture starts inside
+    /// [`crate::Handle`], which only has the core.
+    pub(crate) on_connect_start: Option<EventHandler<HandleKey>>,
+    /// The application's say over which connections may complete: snap
+    /// targets that fail it are never offered, and a release on one adds
+    /// nothing.
+    pub(crate) valid_connection: Option<Callback<crate::types::Connection, bool>>,
 }
 
 impl PartialEq for FlowCore {
@@ -274,6 +290,7 @@ impl FlowCore {
             let mut state = drag.write();
             *state = DragState {
                 pointer_id: Some(pointer_id),
+                origin_client: client,
                 last_client: client,
                 moved: false,
                 suppress_click: true,
@@ -417,6 +434,13 @@ impl FlowCore {
             let Some(geom) = geom_by_id.get(key.node.as_str()) else {
                 continue;
             };
+            // A target the application would refuse is never offered: a snap
+            // that highlights and then does nothing on release is a lie.
+            if let Some(valid) = &self.valid_connection {
+                if !valid.call(orient_connection(from, key)) {
+                    continue;
+                }
+            }
             let point = side_point(&geom.rect, hg.side, hg.offset);
             let d2 = point.distance_sq(cursor);
             if d2 <= radius * radius && best.as_ref().map(|(bd, _)| d2 < *bd).unwrap_or(true) {

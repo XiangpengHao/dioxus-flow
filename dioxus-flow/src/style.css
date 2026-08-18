@@ -278,6 +278,32 @@
   cursor: pointer;
 }
 
+/* Seat-anchored edges: arrowheads are drawn geometry (trimmed from the
+ * stroke), and a bead marks where the edge is seated on the node's rim. */
+.df-edge-arrow {
+  fill: var(--df-edge);
+  stroke: none;
+  transition: fill 120ms ease;
+}
+
+.df-edge:hover .df-edge-arrow,
+.df-edge.df-selected .df-edge-arrow {
+  fill: var(--df-edge-selected);
+}
+
+.df-ports {
+  z-index: 2;
+}
+
+.df-port {
+  fill: var(--df-handle-border);
+  transition: fill 120ms ease;
+}
+
+.df-ports g.df-selected .df-port {
+  fill: var(--df-edge-selected);
+}
+
 .df-edge:hover .df-edge-label,
 .df-edge.df-selected .df-edge-label {
   fill: var(--df-edge-selected);

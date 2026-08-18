@@ -22,6 +22,7 @@ pub fn Toolbar(
     history: Signal<Vec<Snapshot>>,
     snapshot: Callback<()>,
     undo: Callback<()>,
+    anchor: Signal<AnchorMode>,
 ) -> Element {
     let mut added = use_signal(|| 0usize);
 
@@ -116,6 +117,22 @@ pub fn Toolbar(
             }
             button { class: BTN, onclick: move |_| flow.fit_view(400), "Fit view" }
             button { class: BTN, onclick: add_node, "+ Add node" }
+            button {
+                class: BTN,
+                title: "Anchor edges to handles, or pack them into seats around each node's rim",
+                onclick: move |_| {
+                    let mut anchor = anchor;
+                    let next = match *anchor.peek() {
+                        AnchorMode::Handles => AnchorMode::Seats,
+                        AnchorMode::Seats => AnchorMode::Handles,
+                    };
+                    anchor.set(next);
+                },
+                match *anchor.read() {
+                    AnchorMode::Handles => "Anchors: handles",
+                    AnchorMode::Seats => "Anchors: seats",
+                }
+            }
             button {
                 class: BTN,
                 disabled: history.read().is_empty(),

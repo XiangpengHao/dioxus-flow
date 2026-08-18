@@ -303,12 +303,14 @@ fn node_pointer_down<T: Clone + PartialEq + 'static>(
         .filter(|n| (n.selected && n.draggable) || &n.id == id)
         .map(|n| (n.id.clone(), cursor_flow - n.position))
         .collect();
+    let client = client_point(evt.client_coordinates());
     let mut drag = core.drag;
     {
         let mut state = drag.write();
         *state = DragState {
             pointer_id: Some(evt.pointer_id()),
-            last_client: client_point(evt.client_coordinates()),
+            origin_client: client,
+            last_client: client,
             moved: false,
             suppress_click: false,
             grabs,
@@ -423,6 +425,7 @@ pub fn Handle(
                     let mut state = drag.write();
                     *state = DragState {
                         pointer_id: Some(evt.pointer_id()),
+                        origin_client: client,
                         last_client: client,
                         moved: false,
                         suppress_click: false,
@@ -435,6 +438,9 @@ pub fn Handle(
                     snap: None,
                 }));
                 core.interaction.clone().set(Interaction::Connect);
+                if let Some(handler) = &core.on_connect_start {
+                    handler.call(key_for_down.clone());
+                }
             },
         }
     }

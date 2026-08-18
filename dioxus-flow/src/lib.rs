@@ -49,7 +49,7 @@ mod types;
 
 pub use background::{Background, BackgroundVariant};
 pub use controls::Controls;
-pub use edge::EdgeViewCtx;
+pub use edge::{EdgeViewCtx, SeatEdgeLabels, SeatEdgeViewCtx, SeatEdges};
 pub use flow::{Canvas, Flow, WorldLayer, STYLE as STYLESHEET};
 pub use layout::{compute_layout, LayoutDirection, LayoutNode, LayoutOptions};
 pub use minimap::MiniMap;
@@ -57,16 +57,17 @@ pub use node::{DefaultNodeView, Handle, NodeViewCtx};
 pub use path::{bezier_path, edge_path, smooth_step_path, straight_path, EdgeGeometry, EdgePath};
 pub use state::{use_flow, use_flow_handle, use_overlay_inset, FlowCore, FlowHandle, Interaction};
 pub use types::{
-    side_point, Connection, DeleteRequest, Edge, EdgeKind, Grid, HandleGeom, HandleKey, HandleKind,
-    Id, MarkerKind, Node, NodeGeom, Point, Rect, Side, Size, Viewport,
+    side_point, AnchorMode, ConnectEnd, Connection, DeleteRequest, Edge, EdgeKind, Grid,
+    HandleGeom, HandleKey, HandleKind, Id, MarkerKind, Node, NodeGeom, Point, Rect, Side, Size,
+    Viewport,
 };
 
 /// Everything you typically need.
 pub mod prelude {
     pub use crate::{
-        use_flow, use_flow_handle, use_overlay_inset, Background, BackgroundVariant, Connection,
-        Controls, DefaultNodeView, DeleteRequest, Edge, EdgeKind, EdgeViewCtx, Flow, FlowHandle,
-        Handle, HandleKind, LayoutDirection, LayoutOptions, MarkerKind, MiniMap, Node, NodeViewCtx,
-        Point, Rect, Side, Size, Viewport,
+        use_flow, use_flow_handle, use_overlay_inset, AnchorMode, Background, BackgroundVariant,
+        ConnectEnd, Connection, Controls, DefaultNodeView, DeleteRequest, Edge, EdgeKind,
+        EdgeViewCtx, Flow, FlowHandle, Handle, HandleKind, LayoutDirection, LayoutOptions,
+        MarkerKind, MiniMap, Node, NodeViewCtx, Point, Rect, Side, Size, Viewport,
     };
 }

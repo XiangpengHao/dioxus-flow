@@ -588,13 +588,28 @@ pub enum EdgeKind {
     SmoothStep,
 }
 
-/// Arrowhead marker at the target end of an edge.
+/// Arrowhead marker at the end of an edge.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum MarkerKind {
     #[default]
     ArrowClosed,
     Arrow,
     None,
+}
+
+/// How a [`crate::Flow`]'s edges find their endpoints on nodes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AnchorMode {
+    /// Edges attach to [`crate::Handle`]s (or a node's default side when the
+    /// edge names none). The react-flow model, and the default.
+    #[default]
+    Handles,
+    /// Edges attach to *seats* — discrete positions packed around each node's
+    /// rounded rim by [`crate::ports::solve_ports`]. Ends the user pinned
+    /// (via [`Edge::source_seat`]/[`Edge::target_seat`]) stay put; free ends
+    /// are placed nearest their partner, deterministically. Edges are drawn
+    /// with rim-aware curves and a bead where they meet the node.
+    Seats,
 }
 
 /// An edge connecting two nodes.
@@ -607,12 +622,26 @@ pub struct Edge {
     pub source_handle: Option<Id>,
     /// Optional id of a specific target [`crate::Handle`] on the target node.
     pub target_handle: Option<Id>,
+    /// Under [`AnchorMode::Seats`]: the seat this end is pinned to. `None`
+    /// leaves the end to the solver, which is where every connection starts.
+    pub source_seat: Option<crate::ports::PortSeat>,
+    /// See [`Edge::source_seat`].
+    pub target_seat: Option<crate::ports::PortSeat>,
     pub label: Option<String>,
+    /// Where the label sits along the edge, as a fraction of the curve
+    /// (clamped to the drawable range). Seat-anchored edges honour it; the
+    /// default is the midpoint.
+    pub label_position: f64,
+    /// Stroke emphasis, 1–3. Seat-anchored arrowheads scale with it, so a
+    /// heavier edge carries a proportionate head. Styling the stroke itself
+    /// stays in `style`/CSS.
+    pub weight: u8,
     pub kind: EdgeKind,
     /// Animated edges render a marching-dashes effect.
     pub animated: bool,
     pub selected: bool,
     pub selectable: bool,
+    pub marker_start: MarkerKind,
     pub marker_end: MarkerKind,
     /// Extra CSS classes for the edge group.
     pub class: Option<String>,
@@ -631,11 +660,16 @@ impl Edge {
             target,
             source_handle: None,
             target_handle: None,
+            source_seat: None,
+            target_seat: None,
             label: None,
+            label_position: 0.5,
+            weight: 2,
             kind: EdgeKind::default(),
             animated: false,
             selected: false,
             selectable: true,
+            marker_start: MarkerKind::None,
             marker_end: MarkerKind::default(),
             class: None,
             style: None,
@@ -652,6 +686,18 @@ impl Edge {
         self
     }
 
+    /// Place the label at `position` (0..=1) along the curve.
+    pub fn label_position(mut self, position: f64) -> Self {
+        self.label_position = position;
+        self
+    }
+
+    /// Stroke emphasis, 1–3; seat-anchored arrowheads scale with it.
+    pub fn weight(mut self, weight: u8) -> Self {
+        self.weight = weight;
+        self
+    }
+
     pub fn kind(mut self, kind: EdgeKind) -> Self {
         self.kind = kind;
         self
@@ -662,8 +708,25 @@ impl Edge {
         self
     }
 
+    pub fn marker_start(mut self, marker: MarkerKind) -> Self {
+        self.marker_start = marker;
+        self
+    }
+
     pub fn marker_end(mut self, marker: MarkerKind) -> Self {
         self.marker_end = marker;
+        self
+    }
+
+    /// Pin this edge's source end to a seat (used under [`AnchorMode::Seats`]).
+    pub fn source_seat(mut self, seat: crate::ports::PortSeat) -> Self {
+        self.source_seat = Some(seat);
+        self
+    }
+
+    /// Pin this edge's target end to a seat (used under [`AnchorMode::Seats`]).
+    pub fn target_seat(mut self, seat: crate::ports::PortSeat) -> Self {
+        self.target_seat = Some(seat);
         self
     }
 
@@ -695,6 +758,18 @@ pub struct Connection {
     pub target: Id,
     pub source_handle: Option<Id>,
     pub target_handle: Option<Id>,
+}
+
+/// How a connection gesture ended, whatever it ended on. Passed to
+/// `on_connect_end`; `connection` is `None` when the drag was released over
+/// nothing — the hook for "drop on empty canvas to create a node there".
+#[derive(Clone, PartialEq, Debug)]
+pub struct ConnectEnd {
+    /// Where the pointer let go, in flow coordinates.
+    pub point: Point,
+    /// The connection that completed, if the release was on (or snapped to) a
+    /// compatible handle.
+    pub connection: Option<Connection>,
 }
 
 /// What a Delete/Backspace press would remove: the selected nodes, plus

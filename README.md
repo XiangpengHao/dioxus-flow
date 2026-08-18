@@ -18,8 +18,12 @@ edge, auto layout, minimap, and controls. Run it with `cd demo && dx serve`.*
   to select, drag several nodes at once, press Delete to remove.
 - **Connections** — drag from one handle to another to create an edge. The
   preview line snaps to nearby handles.
-- **Edges** — bezier, straight, or smooth-step. Add labels, arrowheads, and
-  an `animated` marching-dashes mode.
+- **Edges** — bezier, straight, or smooth-step. Add labels, arrowheads at
+  either end, and an `animated` marching-dashes mode.
+- **Seat anchoring** — `Flow { anchor: AnchorMode::Seats }` packs edge
+  endpoints into discrete seats around each node's rounded rim (deterministic,
+  crossing-free where possible), drawn with rim-aware curves and beads. The
+  solver is also usable headlessly via the `ports` module.
 - **Auto layout** — a built-in layered layout engine, in any of four
   directions. Nodes and the viewport animate smoothly to their new places.
 - **Custom everything** — render node content with any Dioxus component
@@ -149,6 +153,9 @@ controls), `use_flow()` gives you the same API: the viewport signal,
 | Prop | Fires when |
 | --- | --- |
 | `on_connect` | the user completes a connection (if absent, the edge is added for you) |
+| `on_connect_start` / `on_connect_end` | a connection drag leaves a handle / ends anywhere — `on_connect_end` carries the release point and `connection: None` for a drop on empty canvas, the hook for creating the node there |
+| `is_valid_connection` | (a callback, not an event) your say over which connections may complete; failing targets are never offered as snaps |
+| `on_node_drag_start` / `on_node_drag_stop` | a node drag really begins (past `drag_threshold`, the undo-snapshot moment) / ends with final positions (the snap-and-persist moment) |
 | `on_delete` | Delete/Backspace with a selection (if absent, it's deleted for you) — call `flow.delete_selected()` to proceed, e.g. after saving an undo snapshot |
 | `on_node_click` / `on_edge_click` | pointer down on a node / edge |
 | `on_pane_click` | click on empty canvas (in flow coordinates) |
@@ -193,6 +200,5 @@ Two tips:
 ## Roadmap
 
 - Box selection, edge reconnection
-- Configurable connection validation
 - Sub-flows / node grouping
 - Viewport-culled rendering for very large graphs

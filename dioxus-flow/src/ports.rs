@@ -78,6 +78,23 @@ impl Anchor {
     pub const fn point(self) -> Point {
         Point::new(self.x, self.y)
     }
+
+    /// The side of the node this anchor faces, by its normal's dominant axis.
+    /// On a corner arc the normal points diagonally; the steeper component
+    /// wins, matching which run of the rim the seat was counted along.
+    pub fn side(self) -> Side {
+        if self.nx.abs() >= self.ny.abs() {
+            if self.nx >= 0.0 {
+                Side::Right
+            } else {
+                Side::Left
+            }
+        } else if self.ny >= 0.0 {
+            Side::Bottom
+        } else {
+            Side::Top
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1358,6 +1375,43 @@ mod tests {
             );
             assert!((anchor.nx.hypot(anchor.ny) - 1.0).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn an_anchor_faces_the_side_its_seat_was_counted_along() {
+        let frame = frame(0.0, 0.0);
+        for seat in seats(frame) {
+            let anchor = seat_point(frame, seat);
+            // Corner seats belong to the horizontal runs, and their arc
+            // normals lean no further than the diagonal — so the dominant
+            // axis never contradicts the seat's own side, except at the exact
+            // diagonal where either answer is honest.
+            if anchor.nx.abs() != anchor.ny.abs() {
+                let expected = match seat.side {
+                    Side::Top | Side::Bottom if anchor.ny.abs() > anchor.nx.abs() => seat.side,
+                    Side::Left | Side::Right if anchor.nx.abs() > anchor.ny.abs() => seat.side,
+                    _ => anchor.side(),
+                };
+                assert_eq!(anchor.side(), expected, "{seat:?}");
+            }
+        }
+        // The four plain faces, unambiguously.
+        assert_eq!(
+            seat_point(frame, PortSeat::new(Side::Top, 9)).side(),
+            Side::Top
+        );
+        assert_eq!(
+            seat_point(frame, PortSeat::new(Side::Bottom, 9)).side(),
+            Side::Bottom
+        );
+        assert_eq!(
+            seat_point(frame, PortSeat::new(Side::Left, 2)).side(),
+            Side::Left
+        );
+        assert_eq!(
+            seat_point(frame, PortSeat::new(Side::Right, 2)).side(),
+            Side::Right
+        );
     }
 
     #[test]

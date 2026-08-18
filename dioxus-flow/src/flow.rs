@@ -24,7 +24,8 @@ use crate::state::{
     Interaction,
 };
 use crate::types::{
-    Connection, DeleteRequest, Edge, HandleKind, Id, Node, NodeGeom, Point, Rect, Viewport,
+    AnchorMode, ConnectEnd, Connection, DeleteRequest, Edge, HandleKey, HandleKind, Id, Node,
+    NodeGeom, Point, Rect, Viewport,
 };
 
 /// The component styles [`Canvas`] injects at runtime, public so that tests
@@ -87,6 +88,10 @@ pub fn Canvas(
     /// Master switch for node dragging (read by [`Flow`]'s node layer).
     #[props(default = true)]
     nodes_draggable: bool,
+    /// How far (screen px) a press on a node must travel before it moves the
+    /// node, so a sloppy click never nudges one.
+    #[props(default = 0.0)]
+    drag_threshold: f64,
     /// Snap radius (screen px) for completing a connection near a handle.
     #[props(default = 28.0)]
     connection_radius: f64,
@@ -117,6 +122,22 @@ pub fn Canvas(
     /// Called when the user completes a connection between two handles. When
     /// absent, the edge is added to `edges` automatically.
     on_connect: Option<EventHandler<Connection>>,
+    /// A connection drag has left a handle (started, not completed).
+    on_connect_start: Option<EventHandler<HandleKey>>,
+    /// A connection drag ended — wherever it ended. `connection` is `None`
+    /// when the release was over nothing, and the point says where: the hook
+    /// for "drop on empty canvas to create the node there".
+    on_connect_end: Option<EventHandler<ConnectEnd>>,
+    /// The application's say over which connections may complete. A target
+    /// that fails is never offered as a snap and never completes.
+    is_valid_connection: Option<Callback<Connection, bool>>,
+    /// A node drag actually began (the press travelled past
+    /// `drag_threshold`), with the ids being dragged: the moment to snapshot
+    /// for undo.
+    on_node_drag_start: Option<EventHandler<Vec<Id>>>,
+    /// A node drag ended, with the ids that were dragged. Positions are
+    /// already final in the node list: the moment to snap, settle, persist.
+    on_node_drag_stop: Option<EventHandler<Vec<Id>>>,
     /// Click on empty canvas; the point is in flow coordinates. Fires only
     /// when the press neither travelled nor was claimed by content.
     on_pane_click: Option<EventHandler<Point>>,
@@ -188,6 +209,8 @@ pub fn Canvas(
         size_flush_queued,
         pending_handles,
         handle_flush_queued,
+        on_connect_start,
+        valid_connection: is_valid_connection,
     });
     use_context_provider(|| core);
 
@@ -199,6 +222,7 @@ pub fn Canvas(
         zoom_on_scroll,
         pan_on_scroll,
         nodes_draggable,
+        drag_threshold,
         connection_radius,
         fit_view_padding,
     };
@@ -264,6 +288,7 @@ pub fn Canvas(
             let mut drag = drag;
             let mut state = drag.write();
             state.pointer_id = Some(evt.pointer_id());
+            state.origin_client = client;
             state.last_client = client;
             state.moved = false;
             state.suppress_click = false;
@@ -313,13 +338,33 @@ pub fn Canvas(
                 viewport.set(vp.panned(delta));
             }
             Interaction::DragNode => {
-                let flow = core.client_to_flow(client);
-                {
+                // The press has to travel before it moves anything, so a
+                // sloppy click never nudges a node. Crossing the threshold is
+                // the moment the drag really starts — the snapshot-for-undo
+                // moment — so that is when `on_node_drag_start` fires.
+                let began = {
                     let mut drag = drag;
                     let mut state = drag.write();
-                    state.moved = true;
                     state.last_client = client;
+                    let travelled = state.origin_client.distance(client);
+                    let passed = state.moved || travelled >= config.peek().drag_threshold;
+                    let began = passed && !state.moved;
+                    if passed {
+                        state.moved = true;
+                    }
+                    if !passed {
+                        return;
+                    }
+                    began
+                };
+                if began {
+                    if let Some(handler) = &on_node_drag_start {
+                        let ids: Vec<Id> =
+                            drag.peek().grabs.iter().map(|(id, _)| id.clone()).collect();
+                        handler.call(ids);
+                    }
                 }
+                let flow = core.client_to_flow(client);
                 if let Some(handler) = &on_drag_move {
                     handler.call(flow);
                 }
@@ -371,13 +416,32 @@ pub fn Canvas(
             Interaction::Connect => {
                 let done = connection.peek().clone();
                 if let Some(done) = done {
-                    if let Some(snap) = done.snap {
-                        let conn = orient_connection(&done.from, &snap.key);
+                    let completed = done
+                        .snap
+                        .as_ref()
+                        .map(|snap| orient_connection(&done.from, &snap.key));
+                    if let Some(conn) = completed.clone() {
                         match &on_connect {
                             Some(handler) => handler.call(conn),
                             None => add_edge_for_connection(edges, conn),
                         }
                     }
+                    // However it ended: the release point plus what (if
+                    // anything) completed. A `None` connection with a point is
+                    // the drop-on-empty-canvas hook.
+                    if let Some(handler) = &on_connect_end {
+                        let client = client_point(evt.client_coordinates());
+                        handler.call(ConnectEnd {
+                            point: core.client_to_flow(client),
+                            connection: completed,
+                        });
+                    }
+                }
+            }
+            Interaction::DragNode if drag.peek().moved => {
+                if let Some(handler) = &on_node_drag_stop {
+                    let ids: Vec<Id> = drag.peek().grabs.iter().map(|(id, _)| id.clone()).collect();
+                    handler.call(ids);
                 }
             }
             _ => {}
@@ -513,6 +577,11 @@ pub fn Flow<T: Clone + PartialEq + 'static>(
     nodes: Signal<Vec<Node<T>>>,
     /// The edges, owned by the caller.
     edges: Signal<Vec<Edge>>,
+    /// How edges find their endpoints: [`AnchorMode::Handles`] (default) or
+    /// [`AnchorMode::Seats`] — solver-packed positions around each node's rim,
+    /// drawn with rim-aware curves and beads.
+    #[props(default)]
+    anchor: AnchorMode,
     #[props(default = 0.25)] min_zoom: f64,
     #[props(default = 4.0)] max_zoom: f64,
     /// Pan the canvas by dragging empty space.
@@ -527,6 +596,10 @@ pub fn Flow<T: Clone + PartialEq + 'static>(
     /// Master switch for node dragging (individual nodes can also opt out).
     #[props(default = true)]
     nodes_draggable: bool,
+    /// How far (screen px) a press on a node must travel before it moves the
+    /// node, so a sloppy click never nudges one.
+    #[props(default = 0.0)]
+    drag_threshold: f64,
     /// Snap radius (screen px) for completing a connection near a handle.
     #[props(default = 28.0)]
     connection_radius: f64,
@@ -549,6 +622,22 @@ pub fn Flow<T: Clone + PartialEq + 'static>(
     /// Called when the user completes a connection between two handles. When
     /// absent, the edge is added automatically.
     on_connect: Option<EventHandler<Connection>>,
+    /// A connection drag has left a handle (started, not completed).
+    on_connect_start: Option<EventHandler<HandleKey>>,
+    /// A connection drag ended — wherever it ended. `connection` is `None`
+    /// when the release was over nothing, and the point says where: the hook
+    /// for "drop on empty canvas to create the node there".
+    on_connect_end: Option<EventHandler<ConnectEnd>>,
+    /// The application's say over which connections may complete. A target
+    /// that fails is never offered as a snap and never completes.
+    is_valid_connection: Option<Callback<Connection, bool>>,
+    /// A node drag actually began (the press travelled past
+    /// `drag_threshold`), with the ids being dragged: the moment to snapshot
+    /// for undo.
+    on_node_drag_start: Option<EventHandler<Vec<Id>>>,
+    /// A node drag ended, with the ids that were dragged. Positions are
+    /// already final in the node list: the moment to snap, settle, persist.
+    on_node_drag_stop: Option<EventHandler<Vec<Id>>>,
     /// Called when Delete/Backspace is pressed with a selection. When absent,
     /// the selection (plus connected edges) is deleted automatically; when
     /// present, nothing is deleted — call
@@ -664,6 +753,7 @@ pub fn Flow<T: Clone + PartialEq + 'static>(
             zoom_on_scroll,
             pan_on_scroll,
             nodes_draggable,
+            drag_threshold,
             connection_radius,
             fit_view_padding,
             id,
@@ -672,17 +762,132 @@ pub fn Flow<T: Clone + PartialEq + 'static>(
             geoms,
             deselect_nodes,
             on_connect,
+            on_connect_start,
+            on_connect_end,
+            is_valid_connection,
+            on_node_drag_start,
+            on_node_drag_stop,
             on_pane_click,
             on_pane_double_click,
             on_canvas_key_down,
             on_drag_move,
             world: rsx! {
                 CoreProbe { attach_core }
-                EdgesLayer { edge_view, on_edge_click }
-                NodesLayer { nodes, node_view, on_node_click }
+                match anchor {
+                    AnchorMode::Handles => rsx! {
+                        EdgesLayer { edge_view, on_edge_click }
+                        NodesLayer { nodes, node_view, on_node_click }
+                    },
+                    AnchorMode::Seats => rsx! {
+                        SeatGraphLayers {
+                            nodes,
+                            node_view,
+                            on_node_click,
+                            edge_view,
+                            on_edge_click,
+                        }
+                    },
+                }
                 ConnectionLine {}
             },
             {children}
+        }
+    }
+}
+
+/// The node layer sandwiched between seat-anchored edges and their beads.
+///
+/// One component so the three share one solve: the edge curves render under
+/// the nodes, but the beads — the dots where a connection meets a rim — sit
+/// over them, because a bead is threaded on the rim, not tucked behind it.
+#[component]
+fn SeatGraphLayers<T: Clone + PartialEq + 'static>(
+    nodes: Signal<Vec<Node<T>>>,
+    node_view: Option<Callback<NodeViewCtx<T>, Element>>,
+    on_node_click: Option<EventHandler<Id>>,
+    edge_view: Option<Callback<EdgeViewCtx, Element>>,
+    on_edge_click: Option<EventHandler<Id>>,
+) -> Element {
+    let core = use_context::<FlowCore>();
+    // The one expensive step, behind a memo: re-solves when node geometry or
+    // the edge list changes, never on pan or zoom. Applications with their
+    // own gesture policy run this solve themselves and hand the result to
+    // [`SeatEdges`]; here the edges signal is the whole story.
+    let anchors = use_memo(move || {
+        let geoms = core.geoms.read();
+        let frames: std::collections::BTreeMap<Id, Rect> = geoms
+            .iter()
+            .map(|geom| (geom.id.clone(), geom.rect))
+            .collect();
+        let links: Vec<crate::ports::Link> = core
+            .edges
+            .read()
+            .iter()
+            .map(|edge| crate::ports::Link {
+                id: edge.id.clone(),
+                start: crate::ports::Terminal::Node(edge.source.clone()),
+                end: crate::ports::Terminal::Node(edge.target.clone()),
+                start_seat: edge.source_seat,
+                end_seat: edge.target_seat,
+            })
+            .collect();
+        crate::ports::solve_ports(&frames, &links)
+    });
+
+    // `Flow`'s `edge_view` speaks the handle-mode context; hand it the seat
+    // geometry through the same shape. Views that want the full rim-aware
+    // geometry use [`SeatEdges`] directly.
+    let adapted_edge_view = edge_view.map(|view| {
+        Callback::new(move |ctx: crate::edge::SeatEdgeViewCtx| {
+            view.call(EdgeViewCtx {
+                edge: ctx.edge.clone(),
+                source: ctx.anchors.start.point(),
+                source_side: ctx.anchors.start.side(),
+                target: ctx.anchors.end.point(),
+                target_side: ctx.anchors.end.side(),
+                path: crate::path::EdgePath {
+                    d: ctx.geometry.path.clone(),
+                    label: ctx.geometry.label,
+                },
+                // Seat-mode arrowheads are drawn geometry, not markers.
+                marker_end: None,
+            })
+        })
+    });
+
+    let edges = core.edges;
+    let solved = anchors.read();
+    rsx! {
+        crate::edge::SeatEdges {
+            edges,
+            anchors,
+            edge_view: adapted_edge_view,
+            on_edge_click,
+        }
+        crate::edge::SeatEdgeLabels { edges, anchors }
+        NodesLayer { nodes, node_view, on_node_click }
+        // The beads, over the nodes they are threaded on.
+        svg { class: "df-edges df-ports", "aria-hidden": "true",
+            for edge in edges.read().iter() {
+                if let Some(pair) = solved.get(&edge.id) {
+                    g {
+                        key: "{edge.id}",
+                        class: if edge.selected { "df-selected" },
+                        circle {
+                            class: "df-port",
+                            cx: pair.start.x,
+                            cy: pair.start.y,
+                            r: crate::ports::PORT_RADIUS,
+                        }
+                        circle {
+                            class: "df-port",
+                            cx: pair.end.x,
+                            cy: pair.end.y,
+                            r: crate::ports::PORT_RADIUS,
+                        }
+                    }
+                }
+            }
         }
     }
 }
