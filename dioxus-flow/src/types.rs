@@ -7,6 +7,7 @@ pub type Id = String;
 
 /// A point (or vector) in 2D space. Flow coordinates unless stated otherwise.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Point {
     pub x: f64,
     pub y: f64,
@@ -15,7 +16,7 @@ pub struct Point {
 impl Point {
     pub const ZERO: Point = Point { x: 0.0, y: 0.0 };
 
-    pub fn new(x: f64, y: f64) -> Self {
+    pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
 
@@ -91,6 +92,7 @@ impl From<(f64, f64)> for Size {
 
 /// An axis-aligned rectangle.
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Rect {
     pub x: f64,
     pub y: f64,
@@ -106,7 +108,7 @@ impl Rect {
         height: 0.0,
     };
 
-    pub fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
+    pub const fn new(x: f64, y: f64, width: f64, height: f64) -> Self {
         Self {
             x,
             y,
@@ -117,6 +119,17 @@ impl Rect {
 
     pub fn from_points(origin: Point, size: Size) -> Self {
         Self::new(origin.x, origin.y, size.width, size.height)
+    }
+
+    /// The rectangle two corners describe, in any order — a marquee, a
+    /// selection bounds, a drag rectangle.
+    pub fn between(a: Point, b: Point) -> Self {
+        Self {
+            x: a.x.min(b.x),
+            y: a.y.min(b.y),
+            width: (a.x - b.x).abs(),
+            height: (a.y - b.y).abs(),
+        }
     }
 
     pub fn origin(&self) -> Point {
@@ -153,16 +166,121 @@ impl Rect {
     pub fn contains(&self, p: Point) -> bool {
         p.x >= self.x && p.x <= self.max_x() && p.y >= self.y && p.y <= self.max_y()
     }
+
+    /// Whether the rectangles touch or overlap (touching counts).
+    pub fn intersects(&self, other: Rect) -> bool {
+        self.x <= other.max_x()
+            && self.max_x() >= other.x
+            && self.y <= other.max_y()
+            && self.max_y() >= other.y
+    }
+
+    /// The same rectangle with `by` of room added on every side.
+    pub fn expanded(&self, by: f64) -> Rect {
+        Rect::new(
+            self.x - by,
+            self.y - by,
+            self.width + by * 2.0,
+            self.height + by * 2.0,
+        )
+    }
+
+    /// How far a point is from this rectangle's outline: negative inside,
+    /// positive outside, zero exactly on it.
+    ///
+    /// A band around the outline is then one comparison rather than four, and
+    /// it can straddle the line — which is what a border a person can grab has
+    /// to do, because the line they are aiming at has no thickness.
+    pub fn distance_to_edge(&self, point: Point) -> f64 {
+        let dx = (self.x - point.x).max(point.x - self.max_x());
+        let dy = (self.y - point.y).max(point.y - self.max_y());
+        if dx > 0.0 || dy > 0.0 {
+            dx.max(0.0).hypot(dy.max(0.0))
+        } else {
+            dx.max(dy)
+        }
+    }
+
+    /// The rectangle covering all of `rects`, or `None` when there are none.
+    pub fn bounds(rects: impl IntoIterator<Item = Self>) -> Option<Self> {
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for rect in rects {
+            min_x = min_x.min(rect.x);
+            min_y = min_y.min(rect.y);
+            max_x = max_x.max(rect.max_x());
+            max_y = max_y.max(rect.max_y());
+        }
+        min_x
+            .is_finite()
+            .then_some(Self::new(min_x, min_y, max_x - min_x, max_y - min_y))
+    }
+}
+
+/// The lattice positions come to rest on. Snapping is the plane's business —
+/// the background draws this grid, and a release lands on it — while what may
+/// occupy a cell is the application's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Grid {
+    size: f64,
+}
+
+impl Grid {
+    /// A grid of `size` units. A size that is not a positive number would make
+    /// every snap meaningless, so it falls back to one unit.
+    pub const fn new(size: f64) -> Self {
+        Self {
+            size: if size.is_finite() && size > 0.0 {
+                size
+            } else {
+                1.0
+            },
+        }
+    }
+
+    pub const fn size(self) -> f64 {
+        self.size
+    }
+
+    pub fn snap(self, value: f64) -> f64 {
+        (value / self.size).round() * self.size
+    }
+
+    /// Snapped away from zero, for a measurement that must not be cut short —
+    /// a node grown to fit its text, say.
+    pub fn snap_up(self, value: f64) -> f64 {
+        (value / self.size).ceil() * self.size
+    }
+
+    pub fn snap_point(self, point: Point) -> Point {
+        Point::new(self.snap(point.x), self.snap(point.y))
+    }
+
+    pub fn snap_rect(self, rect: Rect) -> Rect {
+        Rect::new(
+            self.snap(rect.x),
+            self.snap(rect.y),
+            self.snap(rect.width),
+            self.snap(rect.height),
+        )
+    }
 }
 
 /// The pan/zoom state of the flow canvas.
 ///
-/// A flow-space point `p` appears on screen (relative to the container) at
-/// `p * zoom + offset`.
+/// `x`/`y` are the screen point (relative to the container) that the flow
+/// origin is drawn at, so a flow-space point `p` appears on screen at
+/// `p * zoom + offset()`. The same shape — and, with the `serde` feature, the
+/// same serialization — as react-flow's viewport.
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Viewport {
-    /// Translation, in screen pixels.
-    pub offset: Point,
+    /// Horizontal translation, in screen pixels.
+    pub x: f64,
+    /// Vertical translation, in screen pixels.
+    pub y: f64,
     /// Zoom factor.
     pub zoom: f64,
 }
@@ -170,33 +288,123 @@ pub struct Viewport {
 impl Default for Viewport {
     fn default() -> Self {
         Self {
-            offset: Point::ZERO,
+            x: 0.0,
+            y: 0.0,
             zoom: 1.0,
         }
     }
 }
 
 impl Viewport {
+    pub const fn new(x: f64, y: f64, zoom: f64) -> Self {
+        Self { x, y, zoom }
+    }
+
+    /// The translation as a point.
+    pub const fn offset(&self) -> Point {
+        Point::new(self.x, self.y)
+    }
+
+    /// The same viewport translated to `offset`.
+    pub const fn with_offset(self, offset: Point) -> Self {
+        Self {
+            x: offset.x,
+            y: offset.y,
+            zoom: self.zoom,
+        }
+    }
+
     /// Convert a point relative to the container (screen pixels) to flow space.
     pub fn screen_to_flow(&self, p: Point) -> Point {
-        (p - self.offset) / self.zoom
+        (p - self.offset()) / self.zoom
     }
 
     /// Convert a flow-space point to screen pixels relative to the container.
     pub fn flow_to_screen(&self, p: Point) -> Point {
-        p * self.zoom + self.offset
+        p * self.zoom + self.offset()
+    }
+
+    /// Zooms about a screen point, so whatever is under it stays under it.
+    ///
+    /// A zoom that is not a number is refused rather than clamped — `f64::clamp`
+    /// keeps a NaN, and a NaN here would spread to every coordinate drawn from
+    /// this viewport, with nothing left on screen to say why.
+    pub fn zoom_about(self, zoom: f64, screen: Point, min_zoom: f64, max_zoom: f64) -> Self {
+        if !zoom.is_finite() {
+            return self;
+        }
+        let zoom = zoom.clamp(min_zoom, max_zoom);
+        let flow = self.screen_to_flow(screen);
+        Self {
+            x: screen.x - flow.x * zoom,
+            y: screen.y - flow.y * zoom,
+            zoom,
+        }
+    }
+
+    /// Pans by a screen-space delta.
+    pub fn panned(self, by: Point) -> Self {
+        Self {
+            x: self.x + by.x,
+            y: self.y + by.y,
+            ..self
+        }
+    }
+
+    /// Whether this could have come from an editor rather than from a corrupt
+    /// or hand-edited file: every coordinate a number, and the zoom within the
+    /// given limits.
+    pub fn is_sane(self, min_zoom: f64, max_zoom: f64) -> bool {
+        self.x.is_finite() && self.y.is_finite() && (min_zoom..=max_zoom).contains(&self.zoom)
+    }
+
+    /// Frames `drawing` inside `safe` — the part of the screen that is actually
+    /// clear, which is not the whole of it when panels float over the edges. An
+    /// empty drawing centres the origin instead, so a fresh canvas opens with
+    /// room on every side. The zoom is clamped to `[min_zoom, max_zoom]`; pass
+    /// a `max_zoom` below the interactive limit so fitting a single small node
+    /// never magnifies it to fill the screen.
+    pub fn fit(drawing: Option<Rect>, safe: Rect, min_zoom: f64, max_zoom: f64) -> Self {
+        let Some(drawing) = drawing else {
+            return Self {
+                x: safe.x + safe.width / 2.0,
+                y: safe.y + safe.height / 2.0,
+                zoom: 1.0,
+            };
+        };
+        let width = drawing.width.max(1.0);
+        let height = drawing.height.max(1.0);
+        let wanted = (safe.width / width).min(safe.height / height);
+        let zoom = if wanted.is_finite() {
+            wanted.clamp(min_zoom, max_zoom)
+        } else {
+            1.0
+        };
+        Self {
+            x: safe.x + (safe.width - width * zoom) / 2.0 - drawing.x * zoom,
+            y: safe.y + (safe.height - height * zoom) / 2.0 - drawing.y * zoom,
+            zoom,
+        }
     }
 
     pub fn lerp(&self, other: &Viewport, t: f64) -> Viewport {
         Viewport {
-            offset: self.offset.lerp(other.offset, t),
+            x: self.x + (other.x - self.x) * t,
+            y: self.y + (other.y - self.y) * t,
             zoom: self.zoom + (other.zoom - self.zoom) * t,
         }
     }
 }
 
-/// A side of a node, used for handle placement and edge routing.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+/// A side of a node, used for handle placement, seat naming and edge routing.
+///
+/// For port seats: `Top` and `Bottom` count their cells from the left corner,
+/// `Left` and `Right` from the top corner. That common origin is what makes a
+/// seat survive a resize — growing a node rightwards or downwards moves only
+/// the edge being dragged, so every seat that is not on it keeps its place.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 pub enum Side {
     Top,
     Right,
@@ -560,13 +768,136 @@ mod tests {
 
     #[test]
     fn viewport_roundtrip() {
-        let vp = Viewport {
-            offset: Point::new(13.0, -7.0),
-            zoom: 1.7,
-        };
+        let vp = Viewport::new(13.0, -7.0, 1.7);
         let p = Point::new(100.0, 250.0);
         let q = vp.screen_to_flow(vp.flow_to_screen(p));
         assert!(p.distance(q) < 1e-9);
+    }
+
+    /// The property that makes zooming feel like zooming: the thing under the
+    /// pointer does not move.
+    #[test]
+    fn zooming_holds_the_point_it_is_given() {
+        let vp = Viewport::new(137.0, -42.0, 1.4);
+        let at = Point::new(400.0, 300.0);
+        for zoom in [0.2, 0.5, 1.0, 1.7, 3.0, 12.0] {
+            let before = vp.screen_to_flow(at);
+            let after = vp.zoom_about(zoom, at, 0.2, 3.0).screen_to_flow(at);
+            assert!(
+                before.distance(after) < 1e-9,
+                "zoom {zoom} moved the canvas under the pointer",
+            );
+        }
+    }
+
+    #[test]
+    fn zoom_stays_within_its_limits() {
+        let vp = Viewport::new(137.0, -42.0, 1.4);
+        let at = Point::ZERO;
+        assert_eq!(vp.zoom_about(99.0, at, 0.2, 3.0).zoom, 3.0);
+        assert_eq!(vp.zoom_about(0.0, at, 0.2, 3.0).zoom, 0.2);
+        // Refused, not clamped: a NaN would otherwise survive the clamp.
+        assert_eq!(vp.zoom_about(f64::NAN, at, 0.2, 3.0), vp);
+        assert_eq!(vp.zoom_about(f64::INFINITY, at, 0.2, 3.0), vp);
+    }
+
+    #[test]
+    fn a_viewport_from_outside_is_only_trusted_when_it_makes_sense() {
+        assert!(Viewport::new(137.0, -42.0, 1.4).is_sane(0.2, 3.0));
+        assert!(Viewport::default().is_sane(0.2, 3.0));
+        for broken in [
+            Viewport::new(f64::NAN, 0.0, 1.0),
+            Viewport::new(0.0, f64::INFINITY, 1.0),
+            Viewport::new(0.0, 0.0, 0.0),
+            Viewport::new(0.0, 0.0, 6.0),
+            Viewport::new(0.0, 0.0, f64::NAN),
+        ] {
+            assert!(!broken.is_sane(0.2, 3.0), "{broken:?}");
+        }
+    }
+
+    #[test]
+    fn fitting_puts_the_whole_drawing_inside_the_clear_area() {
+        let safe = Rect::new(32.0, 32.0, 1216.0, 560.0);
+        for drawing in [
+            Rect::new(-400.0, -300.0, 900.0, 600.0),
+            Rect::new(0.0, 0.0, 60.0, 40.0),
+            Rect::new(1000.0, 1000.0, 4000.0, 200.0),
+        ] {
+            let fitted = Viewport::fit(Some(drawing), safe, 0.2, 1.35);
+            let top_left = fitted.flow_to_screen(drawing.origin());
+            let bottom_right = fitted.flow_to_screen(Point::new(drawing.max_x(), drawing.max_y()));
+            let slack = 1e-6;
+            assert!(
+                top_left.x >= safe.x - slack && top_left.y >= safe.y - slack,
+                "{drawing:?} starts outside the clear area",
+            );
+            assert!(
+                bottom_right.x <= safe.max_x() + slack && bottom_right.y <= safe.max_y() + slack,
+                "{drawing:?} runs past the clear area",
+            );
+            assert!((0.2..=1.35).contains(&fitted.zoom));
+        }
+    }
+
+    #[test]
+    fn fitting_a_nonsense_drawing_still_gives_a_usable_view() {
+        let safe = Rect::new(0.0, 0.0, 800.0, 600.0);
+        for drawing in [
+            Rect::new(0.0, 0.0, f64::NAN, 10.0),
+            Rect::new(0.0, 0.0, 0.0, 0.0),
+            Rect::new(f64::NAN, 0.0, 10.0, 10.0),
+        ] {
+            let fitted = Viewport::fit(Some(drawing), safe, 0.2, 1.35);
+            assert!(fitted.zoom.is_finite() && fitted.zoom > 0.0, "{drawing:?}");
+        }
+    }
+
+    #[test]
+    fn fitting_nothing_centres_the_origin() {
+        let safe = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let fitted = Viewport::fit(None, safe, 0.2, 1.35);
+        assert_eq!(fitted.flow_to_screen(Point::ZERO), Point::new(400.0, 300.0));
+        assert_eq!(fitted.zoom, 1.0);
+    }
+
+    #[test]
+    fn a_grid_snaps_both_ways_and_survives_a_nonsense_size() {
+        let grid = Grid::new(12.0);
+        assert_eq!(grid.snap(17.0), 12.0);
+        assert_eq!(grid.snap(19.0), 24.0);
+        assert_eq!(grid.snap(-17.0), -12.0);
+        assert_eq!(grid.snap_up(13.0), 24.0);
+        assert_eq!(grid.snap_up(24.0), 24.0);
+        for size in [0.0, -12.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(Grid::new(size).size(), 1.0, "size {size}");
+        }
+    }
+
+    #[test]
+    fn a_rectangle_between_two_corners_is_the_same_whichever_corner_comes_first() {
+        let a = Point::new(30.0, -10.0);
+        let b = Point::new(-6.0, 22.0);
+        assert_eq!(Rect::between(a, b), Rect::between(b, a));
+        assert_eq!(Rect::between(a, b), Rect::new(-6.0, -10.0, 36.0, 32.0));
+    }
+
+    #[test]
+    fn bounds_covers_every_rect_or_nothing_at_all() {
+        assert_eq!(Rect::bounds([]), None);
+        let rects = [
+            Rect::new(0.0, 0.0, 10.0, 10.0),
+            Rect::new(-5.0, 20.0, 5.0, 5.0),
+        ];
+        assert_eq!(Rect::bounds(rects), Some(Rect::new(-5.0, 0.0, 15.0, 25.0)));
+    }
+
+    #[test]
+    fn distance_to_edge_is_signed() {
+        let r = Rect::new(0.0, 0.0, 100.0, 50.0);
+        assert!(r.distance_to_edge(Point::new(50.0, 25.0)) < 0.0);
+        assert_eq!(r.distance_to_edge(Point::new(0.0, 25.0)), 0.0);
+        assert!(r.distance_to_edge(Point::new(110.0, 25.0)) > 0.0);
     }
 
     #[test]

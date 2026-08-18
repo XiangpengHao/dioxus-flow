@@ -36,8 +36,14 @@ pub enum Interaction {
 /// event handlers, so writes don't trigger renders.
 #[derive(Clone, Debug, Default)]
 pub struct DragState {
+    /// The pointer that owns the current gesture; other pointers' moves and
+    /// releases are ignored while it runs.
+    pub pointer_id: Option<i32>,
     pub last_client: Point,
     pub moved: bool,
+    /// A release without movement is normally a pane click; a gesture begun
+    /// with [`FlowCore::begin_pan`] can ask for it not to be.
+    pub suppress_click: bool,
     /// Nodes being dragged: `(id, grab offset)` where
     /// `position = cursor_flow - grab`.
     pub grabs: Vec<(Id, Point)>,
@@ -66,6 +72,10 @@ pub struct FlowConfig {
     pub max_zoom: f64,
     pub pan_on_drag: bool,
     pub zoom_on_scroll: bool,
+    /// Scrolling pans instead of zooming; ctrl/meta (a trackpad pinch
+    /// included) zooms about the pointer. Takes precedence over
+    /// `zoom_on_scroll`.
+    pub pan_on_scroll: bool,
     pub nodes_draggable: bool,
     /// Snap radius for completing connections, in screen pixels.
     pub connection_radius: f64,
@@ -81,6 +91,7 @@ impl Default for FlowConfig {
             max_zoom: 4.0,
             pan_on_drag: true,
             zoom_on_scroll: true,
+            pan_on_scroll: false,
             nodes_draggable: true,
             connection_radius: 28.0,
             fit_view_padding: 0.12,
@@ -222,6 +233,57 @@ impl FlowCore {
         });
     }
 
+    /// Claim the pointer for an application-level gesture that started on
+    /// content inside the canvas, so the pane neither pans nor reports a pane
+    /// click for this press. Call from a `pointerdown` handler (which runs
+    /// before the pane's, while the event bubbles); release the claim with
+    /// [`release_pointer`](Self::release_pointer) when the gesture ends —
+    /// though a `pointerup` reaching the pane releases it too.
+    ///
+    /// Returns `false` when some other gesture already owns the pointer.
+    pub fn claim_pointer(&self) -> bool {
+        let mut interaction = self.interaction;
+        if *interaction.peek() != Interaction::None {
+            return false;
+        }
+        interaction.set(Interaction::Pressed);
+        true
+    }
+
+    /// Release a claim taken with [`claim_pointer`](Self::claim_pointer).
+    pub fn release_pointer(&self) {
+        let mut interaction = self.interaction;
+        if *interaction.peek() == Interaction::Pressed {
+            interaction.set(Interaction::None);
+        }
+    }
+
+    /// Begin a canvas pan from an application handler — e.g. a press on an
+    /// edge that selects it and then lets the canvas pan underneath. The
+    /// press was on content, so the release does not count as a pane click.
+    ///
+    /// `client` is the press position in client (page) coordinates.
+    pub fn begin_pan(&self, pointer_id: i32, client: Point) -> bool {
+        let mut interaction = self.interaction;
+        if *interaction.peek() != Interaction::None {
+            return false;
+        }
+        self.cancel_animations();
+        {
+            let mut drag = self.drag;
+            let mut state = drag.write();
+            *state = DragState {
+                pointer_id: Some(pointer_id),
+                last_client: client,
+                moved: false,
+                suppress_click: true,
+                grabs: Vec::new(),
+            };
+        }
+        interaction.set(Interaction::Pan);
+        true
+    }
+
     /// Convert client (page) coordinates to flow coordinates.
     pub fn client_to_flow(&self, client: Point) -> Point {
         let rect = *self.container.peek();
@@ -270,12 +332,7 @@ impl FlowCore {
         let anchor = anchor_client
             .map(|c| c - rect.origin())
             .unwrap_or_else(|| Point::new(rect.width / 2.0, rect.height / 2.0));
-        let zoom = (vp.zoom * factor).clamp(config.min_zoom, config.max_zoom);
-        let flow_anchor = vp.screen_to_flow(anchor);
-        let target = Viewport {
-            offset: anchor - flow_anchor * zoom,
-            zoom,
-        };
+        let target = vp.zoom_about(vp.zoom * factor, anchor, config.min_zoom, config.max_zoom);
         self.set_viewport(target, duration_ms);
     }
 
@@ -306,13 +363,11 @@ impl FlowCore {
     pub fn center_on(&self, flow: Point, duration_ms: u64) {
         let rect = *self.container.peek();
         let zoom = self.viewport.peek().zoom;
-        let target = Viewport {
-            offset: Point::new(
-                rect.width / 2.0 - flow.x * zoom,
-                rect.height / 2.0 - flow.y * zoom,
-            ),
+        let target = Viewport::new(
+            rect.width / 2.0 - flow.x * zoom,
+            rect.height / 2.0 - flow.y * zoom,
             zoom,
-        };
+        );
         self.set_viewport(target, duration_ms);
     }
 
@@ -610,13 +665,11 @@ fn fit_viewport(core: &FlowCore, bounds: Rect, padding: f64) -> Option<Viewport>
     let zoom =
         (zoom_x.min(zoom_y) * (1.0 - padding).max(0.05)).clamp(config.min_zoom, config.max_zoom);
     let center = bounds.center();
-    Some(Viewport {
-        offset: Point::new(
-            left + free_w / 2.0 - center.x * zoom,
-            top + free_h / 2.0 - center.y * zoom,
-        ),
+    Some(Viewport::new(
+        left + free_w / 2.0 - center.x * zoom,
+        top + free_h / 2.0 - center.y * zoom,
         zoom,
-    })
+    ))
 }
 
 /// Like `FlowCore::fit_bounds`, but rides the same epoch as a concurrently

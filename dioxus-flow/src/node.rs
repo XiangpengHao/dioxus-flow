@@ -307,8 +307,10 @@ fn node_pointer_down<T: Clone + PartialEq + 'static>(
     {
         let mut state = drag.write();
         *state = DragState {
+            pointer_id: Some(evt.pointer_id()),
             last_client: client_point(evt.client_coordinates()),
             moved: false,
+            suppress_click: false,
             grabs,
         };
     }
@@ -414,7 +416,19 @@ pub fn Handle(
                     return;
                 }
                 core.cancel_animations();
-                let cursor = core.client_to_flow(client_point(evt.client_coordinates()));
+                let client = client_point(evt.client_coordinates());
+                let cursor = core.client_to_flow(client);
+                {
+                    let mut drag = core.drag;
+                    let mut state = drag.write();
+                    *state = DragState {
+                        pointer_id: Some(evt.pointer_id()),
+                        last_client: client,
+                        moved: false,
+                        suppress_click: false,
+                        grabs: Vec::new(),
+                    };
+                }
                 core.connection.clone().set(Some(ConnectionState {
                     from: key_for_down.clone(),
                     cursor,

@@ -8,8 +8,14 @@ repository.workspace = true
 keywords = ["dioxus", "flow", "graph", "diagram", "node-editor"]
 categories = ["gui", "visualization"]
 
+[features]
+# Serde derives on the geometry types an application persists: Point, Size,
+# Rect, Side, Viewport (react-flow's {x, y, zoom} shape), and ports::PortSeat.
+serde = ["dep:serde"]
+
 [dependencies]
 dioxus = { workspace = true }
+serde = { version = "1", features = ["derive"], optional = true }
 # Instant that works on wasm and native alike (re-exports std on native).
 web-time = "1"
 

@@ -33,7 +33,7 @@
   overflow: hidden;
   overflow: clip;
   background: var(--df-bg);
-  cursor: default;
+  cursor: var(--df-cursor, default);
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -115,6 +115,16 @@
   position: absolute;
   top: 0;
   left: 0;
+}
+
+/* World-space overlay layers: same transform as .df-viewport, drawn over it. */
+.df-world-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  z-index: 2;
+  pointer-events: none;
 }
 
 /* ---- nodes ----------------------------------------------------------- */

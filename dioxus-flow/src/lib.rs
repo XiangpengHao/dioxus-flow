@@ -38,22 +38,27 @@ mod flow;
 mod layout;
 mod minimap;
 mod node;
+pub mod paper;
 mod path;
+pub mod place;
+pub mod ports;
+pub mod press;
+pub mod settle;
 mod state;
 mod types;
 
 pub use background::{Background, BackgroundVariant};
 pub use controls::Controls;
 pub use edge::EdgeViewCtx;
-pub use flow::Flow;
+pub use flow::{Canvas, Flow, WorldLayer, STYLE as STYLESHEET};
 pub use layout::{compute_layout, LayoutDirection, LayoutNode, LayoutOptions};
 pub use minimap::MiniMap;
 pub use node::{DefaultNodeView, Handle, NodeViewCtx};
 pub use path::{bezier_path, edge_path, smooth_step_path, straight_path, EdgeGeometry, EdgePath};
 pub use state::{use_flow, use_flow_handle, use_overlay_inset, FlowCore, FlowHandle, Interaction};
 pub use types::{
-    side_point, Connection, DeleteRequest, Edge, EdgeKind, HandleGeom, HandleKey, HandleKind, Id,
-    MarkerKind, Node, NodeGeom, Point, Rect, Side, Size, Viewport,
+    side_point, Connection, DeleteRequest, Edge, EdgeKind, Grid, HandleGeom, HandleKey, HandleKind,
+    Id, MarkerKind, Node, NodeGeom, Point, Rect, Side, Size, Viewport,
 };
 
 /// Everything you typically need.

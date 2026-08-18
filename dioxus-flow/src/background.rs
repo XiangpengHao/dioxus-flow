@@ -29,8 +29,8 @@ pub fn Background(
     let core = use_context::<FlowCore>();
     let vp = *core.viewport.read();
     let scaled = (gap * vp.zoom).max(1.0);
-    let x = vp.offset.x.rem_euclid(scaled);
-    let y = vp.offset.y.rem_euclid(scaled);
+    let x = vp.x.rem_euclid(scaled);
+    let y = vp.y.rem_euclid(scaled);
     let pattern_id = format!("df-bg-{}", core.iid);
     let class = format!(
         "df-background{}",

@@ -682,6 +682,7 @@ dependencies = [
  "dioxus",
  "futures-timer",
  "gloo-timers",
+ "serde",
  "web-time",
 ]
 
