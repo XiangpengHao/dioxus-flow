@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 keywords = ["dioxus", "flow", "graph", "diagram", "node-editor"]
 categories = ["gui", "visualization"]
+readme = "../README.md"
 
 [features]
 # Serde derives on the geometry types an application persists: Point, Size,
